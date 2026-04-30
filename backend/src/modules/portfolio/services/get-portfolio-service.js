@@ -1,13 +1,8 @@
 const User = require('../../../schema/user.model');
 const Order = require('../../../schema/order.model');
+const Position = require('../../../schema/position.model');
 const { getPrice } = require('../../../state/market.state');
 
-/**
- * Build a detailed portfolio with unrealized & realized PnL.
- *
- * @param {String} userId - Authenticated user's _id
- * @returns {Object} { balances, assets, totalPortfolioValue, totalUnrealizedPnL, totalRealizedPnL }
- */
 const getPortfolio = async (userId) => {
   const user = await User.findById(userId);
   if (!user) {
@@ -15,40 +10,49 @@ const getPortfolio = async (userId) => {
     throw new BadRequestError('User not found');
   }
 
-  // ── Convert wallet Map → plain object ────────────────────────
   const balances =
     user.wallet instanceof Map
       ? Object.fromEntries(user.wallet)
       : user.wallet || {};
+  const reservedBalances =
+    user.reservedWallet instanceof Map
+      ? Object.fromEntries(user.reservedWallet)
+      : user.reservedWallet || {};
 
-  // ── Per-asset breakdown ──────────────────────────────────────
+  const [positions, sellOrders] = await Promise.all([
+    Position.find({ user: userId, status: 'OPEN' }).lean(),
+    Order.find({
+      user: userId,
+      status: 'FILLED',
+      realizedPnL: { $ne: 0 },
+    }).lean(),
+  ]);
+
   const assets = [];
   let totalPortfolioValue = 0;
   let totalUnrealizedPnL = 0;
 
   for (const [asset, balance] of Object.entries(balances)) {
-    // USDT is the quote currency — add it straight to portfolio value
-    if (asset === 'USDT') {
-      totalPortfolioValue += balance;
+    if (!balance || balance <= 0) {
       continue;
     }
 
-    // Skip assets with zero or negative balance
-    if (!balance || balance <= 0) continue;
+    if (asset === 'USDT') {
+      totalPortfolioValue += Number(balance || 0);
+      continue;
+    }
 
     const symbol = `${asset}USDT`;
-
-    // ── Live market price ────────────────────────────────────
     const marketData = getPrice(symbol);
     const currentPrice =
       marketData && marketData.price ? parseFloat(marketData.price) : null;
 
-    // ── Historical BUY orders for avg-cost basis ─────────────
     const buyOrders = await Order.find({
       user: userId,
       symbol,
       side: 'BUY',
       status: 'FILLED',
+      realizedPnL: 0,
     }).lean();
 
     let totalBuyQuantity = 0;
@@ -56,13 +60,10 @@ const getPortfolio = async (userId) => {
 
     for (const order of buyOrders) {
       totalBuyQuantity += order.quantity;
-      totalBuyValue += order.total; // quantity × price at fill
+      totalBuyValue += order.total;
     }
 
-    const avgBuyPrice =
-      totalBuyQuantity > 0 ? totalBuyValue / totalBuyQuantity : 0;
-
-    // ── Value & PnL ──────────────────────────────────────────
+    const avgBuyPrice = totalBuyQuantity > 0 ? totalBuyValue / totalBuyQuantity : 0;
     const currentValue = currentPrice ? balance * currentPrice : 0;
     const costBasis = balance * avgBuyPrice;
     const unrealizedPnL = currentPrice ? currentValue - costBasis : 0;
@@ -80,15 +81,46 @@ const getPortfolio = async (userId) => {
       unrealizedPnL: parseFloat(unrealizedPnL.toFixed(8)),
       totalBuyQuantity: parseFloat(totalBuyQuantity.toFixed(8)),
       totalBuyValue: parseFloat(totalBuyValue.toFixed(8)),
+      kind: 'SPOT_ASSET',
     });
   }
 
-  // ── Realized PnL from all SELL orders ──────────────────────────
-  const sellOrders = await Order.find({
-    user: userId,
-    side: 'SELL',
-    status: 'FILLED',
-  }).lean();
+  Object.entries(reservedBalances).forEach(([asset, amount]) => {
+    if (!amount || amount <= 0) {
+      return;
+    }
+
+    totalPortfolioValue += Number(amount || 0);
+  });
+
+  const openPositions = positions.map((position) => {
+    const marketData = getPrice(position.symbol) || {};
+    const currentPrice = Number(marketData.price || position.entryPrice || 0);
+    const multiplier = position.side === 'LONG' ? 1 : -1;
+    const unrealizedPnL =
+      (currentPrice - Number(position.entryPrice || 0)) *
+      Number(position.quantity || 0) *
+      multiplier;
+
+    totalUnrealizedPnL += unrealizedPnL;
+    totalPortfolioValue += unrealizedPnL;
+
+    return {
+      id: String(position._id),
+      symbol: position.symbol,
+      side: position.side,
+      quantity: Number(position.quantity || 0),
+      entryPrice: Number(position.entryPrice || 0),
+      currentPrice,
+      currentValue: Number(position.initialMargin || 0) + unrealizedPnL,
+      initialMargin: Number(position.initialMargin || 0),
+      stopLoss: Number(position.stopLoss || 0),
+      takeProfit: Number(position.takeProfit || 0),
+      unrealizedPnL: Number(unrealizedPnL.toFixed(8)),
+      strategy: position.strategy || 'Unlabeled',
+      kind: 'OPEN_POSITION',
+    };
+  });
 
   let totalRealizedPnL = 0;
   for (const order of sellOrders) {
@@ -97,7 +129,11 @@ const getPortfolio = async (userId) => {
 
   return {
     balances,
+    reservedBalances,
     assets,
+    openPositions,
+    availableUsdt: parseFloat(Number(balances.USDT || 0).toFixed(6)),
+    reservedUsdt: parseFloat(Number(reservedBalances.USDT || 0).toFixed(6)),
     totalPortfolioValue: parseFloat(totalPortfolioValue.toFixed(8)),
     totalUnrealizedPnL: parseFloat(totalUnrealizedPnL.toFixed(8)),
     totalRealizedPnL: parseFloat(totalRealizedPnL.toFixed(6)),

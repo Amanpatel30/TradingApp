@@ -41,6 +41,24 @@ const authSchema = new mongoose.Schema(
       default: 'active',
     },
 
+    avatarLabel: {
+      type: String,
+      trim: true,
+      maxlength: 2,
+      default: '',
+    },
+
+    avatarColor: {
+      type: String,
+      trim: true,
+      default: '#4F46E5',
+    },
+
+    demoDataFallbackEnabled: {
+      type: Boolean,
+      default: false,
+    },
+
     // ✅ SCALABLE WALLET STRUCTURE
     wallet: {
       type: Map,
@@ -48,6 +66,24 @@ const authSchema = new mongoose.Schema(
       default: {
         USDT: 10000,  // Starting demo balance
       },
+    },
+
+    reservedWallet: {
+      type: Map,
+      of: Number,
+      default: {
+        USDT: 0,
+      },
+    },
+
+    demoBalanceTopUpTotal: {
+      type: Number,
+      default: 0,
+    },
+
+    dashboardProfile: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
 
   },

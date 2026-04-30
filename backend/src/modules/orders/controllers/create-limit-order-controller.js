@@ -6,7 +6,7 @@ const { placeLimitOrder } = require('../services/place-limit-order-service');
 // @route   POST /api/orders/limit
 // @access  Private
 const createLimitOrder = asyncHandler(async (req, res) => {
-  const { symbol, side, quantity, limitPrice } = req.body;
+  const { symbol, side, quantity, limitPrice, strategy, stopLoss, takeProfit, clientOrderId } = req.body;
 
   const result = await placeLimitOrder({
     userId: req.user._id,
@@ -14,6 +14,10 @@ const createLimitOrder = asyncHandler(async (req, res) => {
     side,
     quantity,
     limitPrice,
+    strategy,
+    stopLoss,
+    takeProfit,
+    clientOrderId,
   });
 
   return ApiResponse.created(

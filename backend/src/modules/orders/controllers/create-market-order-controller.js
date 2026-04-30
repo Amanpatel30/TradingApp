@@ -6,13 +6,17 @@ const { placeMarketOrder } = require('../services/place-market-order-service');
 // @route   POST /api/orders/market
 // @access  Private
 const createMarketOrder = asyncHandler(async (req, res) => {
-  const { symbol, side, quantity } = req.body;
+  const { symbol, side, quantity, strategy, stopLoss, takeProfit, clientOrderId } = req.body;
 
   const order = await placeMarketOrder({
     userId: req.user._id,
     symbol,
     side,
     quantity,
+    strategy,
+    stopLoss,
+    takeProfit,
+    clientOrderId,
   });
 
   return ApiResponse.created(

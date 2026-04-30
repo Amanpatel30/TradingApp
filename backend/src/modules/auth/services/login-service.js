@@ -3,6 +3,7 @@ const jwtUtils = require('../../../lib/jwt');
 const passwordUtils = require('../../../utils/password');
 const authLogger = require('../auth-logger');
 const { UnauthorizedError, ForbiddenError } = require('../../../utils/custom-error');
+const { buildAuthUserPayload } = require('./build-auth-user-payload');
 
 const login = async (email, password) => {
   // Find user with password field
@@ -37,14 +38,7 @@ const login = async (email, password) => {
   await user.save();
 
   return {
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      status: user.status,
-      wallet: user.wallet instanceof Map ? Object.fromEntries(user.wallet) : (user.wallet || {}),
-    },
+    user: buildAuthUserPayload(user),
     accessToken,
     refreshToken,
   };

@@ -1,5 +1,4 @@
 const Order = require('../../../schema/order.model');
-const { NotFoundError } = require('../../../utils/custom-error');
 
 const getTradeHistory = async ({ userId, page, limit, symbol }) => {
   const filter = {
@@ -22,25 +21,26 @@ const getTradeHistory = async ({ userId, page, limit, symbol }) => {
     Order.countDocuments(filter),
   ]);
 
-  if (!orders.length) {
-    throw new NotFoundError('No trade history available');
-  }
-
   return {
     trades: orders.map((order) => ({
       tradeId: order._id,
       symbol: order.symbol,
       side: order.side,
+      type: order.type,
       quantity: order.quantity,
       price: order.price,
+      limitPrice: order.limitPrice || null,
+      total: order.total,
       status: order.status,
+      realizedPnL: order.realizedPnL || 0,
+      strategy: order.strategy || 'Unlabeled',
       timestamp: order.createdAt,
     })),
     pagination: {
       page,
       limit,
       totalRecords,
-      totalPages: Math.ceil(totalRecords / limit),
+      totalPages: totalRecords ? Math.ceil(totalRecords / limit) : 0,
     },
   };
 };

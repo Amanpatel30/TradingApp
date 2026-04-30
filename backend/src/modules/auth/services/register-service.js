@@ -3,6 +3,10 @@ const jwtUtils = require('../../../lib/jwt');
 const passwordUtils = require('../../../utils/password');
 const authLogger = require('../auth-logger');
 const { ConflictError } = require('../../../utils/custom-error');
+const {
+  rebuildUserPortfolioSnapshots,
+} = require('../../dashboard/services/snapshot-service');
+const { buildAuthUserPayload } = require('./build-auth-user-payload');
 
 const register = async (userData) => {
   // Check if user already exists
@@ -22,6 +26,8 @@ const register = async (userData) => {
     password: hashedPassword,
   });
 
+  await rebuildUserPortfolioSnapshots(user._id);
+
   authLogger.info(`New user registered: ${user.email}`);
 
   // console.log(user)
@@ -34,14 +40,7 @@ const register = async (userData) => {
   await user.save();
 
   return {
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      status: user.status,
-      wallet: user.wallet instanceof Map ? Object.fromEntries(user.wallet) : (user.wallet || {}),
-    },
+    user: buildAuthUserPayload(user),
     accessToken,
     refreshToken,
   };

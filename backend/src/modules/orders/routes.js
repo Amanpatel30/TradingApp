@@ -2,10 +2,11 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../../middlewares/authenticate');
 const { createMarketOrder } = require('./controllers/create-market-order-controller');
-
 const { createLimitOrder } = require('./controllers/create-limit-order-controller');
 const { cancelOrderController } = require('./controllers/cancel-order-controller');
+const { getOpenOrdersController } = require('./controllers/get-open-orders-controller');
 
+router.get('/open', authenticate, getOpenOrdersController);
 router.post('/market', authenticate, createMarketOrder);
 router.post('/limit', authenticate, createLimitOrder);
 router.patch('/:id/cancel', authenticate, cancelOrderController);

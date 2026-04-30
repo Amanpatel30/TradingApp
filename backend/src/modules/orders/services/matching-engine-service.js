@@ -1,138 +1,217 @@
-const User = require('../../../schema/user.model');
 const Order = require('../../../schema/order.model');
+const {
+  rebuildUserPortfolioSnapshots,
+} = require('../../dashboard/services/snapshot-service');
+const {
+  estimateExecutionPrice,
+  getMarketQuote,
+  round,
+} = require('./trading-engine-utils');
+const { adjustReservedWalletBalanceAtomic } = require('./wallet-atomic-service');
+const { runWithMongoTransaction } = require('./mongo-transaction-service');
+const {
+  runMatchingForSymbol,
+  registerLimitConfirmation,
+  clearLimitConfirmation,
+} = require('./matching-runtime-service');
+const { emitPortfolioUpdated, emitUserTradingEvent } = require('./trading-realtime-service');
+const {
+  openPosition,
+  checkAndCloseTriggeredPositions,
+} = require('./position-engine-service');
 
-/**
- * Checks and executes matching LIMIT orders for a given symbol and current price.
- */
-const checkAndExecuteOrders = async (symbol, currentPrice) => {
-  const openOrders = await Order.find({
-    symbol: symbol.toUpperCase(),
-    status: 'OPEN',
-    type: 'LIMIT',
-  });
-
-  if (!openOrders.length) return;
-
-  const normalizedCurrent = Number(currentPrice.toFixed(2));
-
-  console.log(
-    `Checking ${openOrders.length} open orders for ${symbol} at ${normalizedCurrent}`
+const isReservationMismatchError = (error) =>
+  /Unable to release reserved .* balance|Insufficient .* balance for reservation/i.test(
+    String(error?.message || '')
   );
 
-  for (const order of openOrders) {
-    try {
-      await processOrder(order, normalizedCurrent);
-    } catch (err) {
-      console.error(
-        `Failed to process order ${order._id}:`,
-        err.message
-      );
+const cancelBrokenOpenOrder = async (order, reason) => {
+  clearLimitConfirmation(order._id);
+  await Order.updateOne(
+    {
+      _id: order._id,
+      status: { $in: ['OPEN', 'PROCESSING'] },
+    },
+    {
+      $set: {
+        status: 'CANCELLED',
+        exitReason: reason,
+      },
     }
-  }
+  );
+};
+
+const checkAndExecuteOrders = async (symbol, currentPrice, eventTime = Date.now()) => {
+  await runMatchingForSymbol({
+    symbol,
+    currentPrice,
+    eventTime,
+    processTick: async ({ currentPrice: latestPrice }) => {
+      const openOrders = await Order.find({
+        symbol: String(symbol || '').toUpperCase(),
+        status: 'OPEN',
+        type: 'LIMIT',
+      });
+
+      if (!openOrders.length) {
+        await checkAndCloseTriggeredPositions(symbol, latestPrice);
+        return;
+      }
+
+      const normalizedCurrent = Number(Number(latestPrice || 0).toFixed(8));
+
+      for (const order of openOrders) {
+        try {
+          await processOrder(order, normalizedCurrent);
+        } catch (error) {
+          if (isReservationMismatchError(error)) {
+            await cancelBrokenOpenOrder(order, 'RESERVED_BALANCE_MISMATCH');
+            console.warn(
+              `Cancelled order ${order._id} after reserved-balance mismatch: ${error.message}`
+            );
+            continue;
+          }
+
+          console.error(`Failed to process order ${order._id}:`, error.message);
+        }
+      }
+
+      await checkAndCloseTriggeredPositions(symbol, latestPrice);
+    },
+  });
 };
 
 const processOrder = async (order, currentPrice) => {
   const isBuy = order.side === 'BUY';
-  const isSell = order.side === 'SELL';
+  const normalizedLimit = Number(Number(order.limitPrice || order.price || 0).toFixed(8));
 
-  const normalizedLimit = Number(order.limitPrice.toFixed(2));
-  let shouldExecute = false;
-
-  console.log("Matched BUY order:", order._id, "Current Price:", currentPrice, "Limit Price:", normalizedLimit);
-  if (isBuy && currentPrice <= normalizedLimit) {
-    shouldExecute = true;
-
-    
-  }
-
-  if (isSell && currentPrice >= normalizedLimit) {
-    shouldExecute = true;
-    
-  }
-
-  if (!shouldExecute) return;
-  
-
-  // 🔥 IMPORTANT: Mark FILLED FIRST (prevents double execution)
-  order.status = 'FILLED';
-
-  const user = await User.findById(order.user);
-  if (!user) {
+  if (!normalizedLimit) {
     order.status = 'CANCELLED';
+    order.exitReason = 'INVALID_LIMIT';
     await order.save();
+    clearLimitConfirmation(order._id);
     return;
   }
 
-  const quantity = Number(order.quantity.toFixed(8));
-  const executionPrice = currentPrice;
-  const total = Number((quantity * executionPrice).toFixed(6));
+  const shouldExecute =
+    (isBuy && currentPrice <= normalizedLimit) ||
+    (!isBuy && currentPrice >= normalizedLimit);
 
-  // Parse base/quote
-  const QUOTE_ASSETS = ['BUSD', 'USDT', 'USDC', 'BTC', 'ETH', 'BNB'];
-  let baseAsset = '';
-  let quoteAsset = '';
-
-  const upperSymbol = order.symbol.toUpperCase();
-
-  for (const quote of QUOTE_ASSETS) {
-    if (upperSymbol.endsWith(quote)) {
-      baseAsset = upperSymbol.slice(0, -quote.length);
-      quoteAsset = quote;
-      break;
-    }
-  }
-
-  if (!baseAsset || !quoteAsset) {
-    order.status = 'CANCELLED';
-    await order.save();
+  if (!shouldExecute) {
+    clearLimitConfirmation(order._id);
     return;
   }
 
-  // BUY
-  if (isBuy) {
-    const quoteBalance = Number(
-      (user.wallet.get(quoteAsset) || 0).toFixed(6)
-    );
-
-    if (quoteBalance < total) {
-      order.status = 'CANCELLED';
-      await order.save();
-      return;
-    }
-
-    user.wallet.set(quoteAsset, quoteBalance - total);
-    user.wallet.set(
-      baseAsset,
-      Number(((user.wallet.get(baseAsset) || 0) + quantity).toFixed(8))
-    );
+  if (!registerLimitConfirmation(order._id, shouldExecute)) {
+    return;
   }
 
-  // SELL
-  if (isSell) {
-    const baseBalance = Number(
-      (user.wallet.get(baseAsset) || 0).toFixed(8)
+  const quote = getMarketQuote(order.symbol);
+  const executionMeta = estimateExecutionPrice({
+    quote,
+    side: order.side,
+    kind: 'LIMIT',
+    limitPrice: normalizedLimit,
+  });
+  const executionPrice = executionMeta.executionPrice;
+  const actualMargin = round(Number(order.quantity || 0) * executionPrice, 6);
+  const result = await runWithMongoTransaction(async ({ session, transactional }) => {
+    const claimedOrder = await Order.findOneAndUpdate(
+      {
+        _id: order._id,
+        status: 'OPEN',
+      },
+      {
+        $set: {
+          status: 'PROCESSING',
+        },
+      },
+      {
+        new: true,
+        ...(session ? { session } : {}),
+      }
     );
 
-    if (baseBalance < quantity) {
-      order.status = 'CANCELLED';
-      await order.save();
-      return;
+    if (!claimedOrder) {
+      return null;
     }
 
-    user.wallet.set(baseAsset, baseBalance - quantity);
-    user.wallet.set(
-      quoteAsset,
-      Number(((user.wallet.get(quoteAsset) || 0) + total).toFixed(6))
-    );
+    try {
+      const updatedUser = await adjustReservedWalletBalanceAtomic({
+        userId: claimedOrder.user,
+        asset: 'USDT',
+        currentReserved: Number(claimedOrder.reservedAmount || claimedOrder.total || 0),
+        targetReserved: actualMargin,
+        session,
+      });
+
+      const position = await openPosition({
+        user: updatedUser,
+        order: claimedOrder,
+        executionPrice,
+        initialMargin: actualMargin,
+        stopLoss: claimedOrder.stopLoss,
+        takeProfit: claimedOrder.takeProfit,
+        session,
+      });
+
+      const finalizedOrder = await Order.findOneAndUpdate(
+        {
+          _id: claimedOrder._id,
+          status: 'PROCESSING',
+        },
+        {
+          $set: {
+            status: 'FILLED',
+            price: executionPrice,
+            total: actualMargin,
+            reservedAmount: actualMargin,
+            spreadApplied: executionMeta.spreadApplied,
+            slippageApplied: executionMeta.slippageApplied,
+            executionSource: 'SIMULATED_LIMIT_MATCH',
+          },
+        },
+        {
+          new: true,
+          ...(session ? { session } : {}),
+        }
+      );
+
+      return {
+        order: finalizedOrder,
+        position,
+      };
+    } catch (error) {
+      if (!transactional) {
+        await adjustReservedWalletBalanceAtomic({
+          userId: claimedOrder.user,
+          asset: 'USDT',
+          currentReserved: actualMargin,
+          targetReserved: Number(claimedOrder.reservedAmount || claimedOrder.total || 0),
+        }).catch(() => {});
+        await Order.findByIdAndUpdate(claimedOrder._id, {
+          status: 'OPEN',
+          exitReason: '',
+        }).catch(() => {});
+      }
+      throw error;
+    }
+  });
+
+  if (result?.order?._id) {
+    clearLimitConfirmation(order._id);
+    await rebuildUserPortfolioSnapshots(order.user);
+    emitUserTradingEvent(order.user, 'order_filled', {
+      orderId: String(result.order._id),
+      symbol: result.order.symbol,
+      side: result.order.side,
+      type: result.order.type,
+      price: result.order.price,
+      total: result.order.total,
+      positionId: String(result.position._id),
+    });
+    await emitPortfolioUpdated(order.user, { reason: 'ORDER_FILLED' });
   }
-
-  order.price = executionPrice;
-  order.total = total;
-
-  await user.save();
-  await order.save();
-
-  console.log(`✅ Order ${order._id} FILLED at ${executionPrice}`);
 };
 
 module.exports = { checkAndExecuteOrders };
