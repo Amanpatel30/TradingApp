@@ -13,11 +13,22 @@ Almost every module in `backend/src/modules/` follows this strict separation:
 - **Services (`services/`):** This is where the "Business Logic" lives. They perform database queries and calculations.
 - **Schemas (`schema/`):** Mongoose models defining the data structure in MongoDB.
 
-### B. Atomic Database Operations
-To prevent race conditions (e.g., two trades spending the same money), the app avoids "Read-Modify-Write" in JavaScript. Instead, it uses **Atomic MongoDB Operators**:
+### B. Atomic Database Operations (The "Check-and-Act" Pattern)
+To prevent race conditions (e.g., two trades spending the same money), the app avoids "Read-Modify-Write" in JavaScript.
+
+**The Problem with JS-level checks:**
+If you check `if (user.balance >= cost)` in JavaScript, you are relying on "old news." If two requests arrive at the exact same millisecond, both might see a balance of $100, both pass the JS check for a $60 item, and the user successfully spends $120. This is a **Double Spend** bug.
+
+**The Atomic Solution:**
+The app uses **Atomic MongoDB Operators** to perform the check and the update in one uninterruptible step at the database level.
 - **File:** `backend/src/modules/orders/services/wallet-atomic-service.js`
 - **Pattern:** Using `$inc` with a query filter.
-- **Logic:** `User.updateOne({ _id, balance: { $gte: cost } }, { $inc: { balance: -cost } })`. If the user has less than the cost, the query finds 0 documents, and the update fails safely.
+- **Logic:** `User.updateOne({ _id, balance: { $gte: cost } }, { $inc: { balance: -cost } })`.
+
+**Why it works:**
+1. **The Query Filter (`balance: { $gte: cost }`):** This is the "Check." MongoDB only performs the update if this condition is currently true *inside the database* at that exact microsecond.
+2. **The Operator (`$inc`):** This is the "Action." Instead of setting a fixed value (which might overwrite a recent deposit), it tells the DB: "Subtract this amount from whatever the current number is."
+3. **Failing Safely:** If the user has $40 and tries to spend $60, the query finds **0 documents** that match. No money is subtracted, nothing is corrupted, and the database returns a "0 matched" status, allowing the backend to return an "Insufficient Funds" error safely.
 
 ### C. The Sequential Tick Processor
 High-frequency market data can cause race conditions if multiple price updates are processed at once for the same user.
