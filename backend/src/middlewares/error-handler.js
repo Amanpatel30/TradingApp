@@ -4,6 +4,39 @@ const { CustomError } = require('../utils/custom-error');
 const logger = new Logger('ErrorHandler');
 
 /**
+ * Mask sensitive fields in an object
+ * @param {Object} data - Data to mask
+ * @returns {Object} Masked data
+ */
+const maskSensitiveData = (data) => {
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+
+  const sensitiveFields = ['password', 'token', 'refreshToken', 'accessToken', 'secret', 'apiKey'];
+
+  try {
+    // Create a deep copy to avoid mutating the original object
+    const masked = JSON.parse(JSON.stringify(data));
+
+    const mask = (obj) => {
+      for (const key in obj) {
+        if (sensitiveFields.includes(key)) {
+          obj[key] = '******';
+        } else if (obj[key] && typeof obj[key] === 'object') {
+          mask(obj[key]);
+        }
+      }
+    };
+
+    mask(masked);
+    return masked;
+  } catch (e) {
+    return '[Unable to mask sensitive data]';
+  }
+};
+
+/**
  * Centralized Error Handler Middleware
  * Handles all errors in the application
  */
@@ -18,7 +51,7 @@ const errorHandler = (err, req, res, next) => {
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
+    body: maskSensitiveData(req.body),
     params: req.params,
     query: req.query,
   });
