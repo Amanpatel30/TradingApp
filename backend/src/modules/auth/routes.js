@@ -9,9 +9,11 @@ const { getMe } = require('./controllers/get-me');
 const { updateProfileController } = require('./controllers/update-profile');
 const { addDemoBalanceController } = require('./controllers/add-demo-balance');
 const authenticate = require('../../middlewares/authenticate');
+const validateRequest = require('../../middlewares/validate-request');
+const registerSchema = require('./validations/register');
 
 // Public routes
-router.post('/register', register);
+router.post('/register', validateRequest(registerSchema), register);
 router.post('/login', login);
 router.post('/refresh-token', refreshToken);
 
