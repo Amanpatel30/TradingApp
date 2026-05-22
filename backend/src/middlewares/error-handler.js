@@ -1,5 +1,6 @@
 const Logger = require('../utils/logger');
 const { CustomError } = require('../utils/custom-error');
+const { maskSensitiveData } = require('../utils/security');
 
 const logger = new Logger('ErrorHandler');
 
@@ -18,7 +19,7 @@ const errorHandler = (err, req, res, next) => {
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
+    body: maskSensitiveData(req.body),
     params: req.params,
     query: req.query,
   });
