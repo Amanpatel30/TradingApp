@@ -7,7 +7,7 @@ This guide breaks down exactly how each component of the CryptoSim application w
 ## 1. Backend: The Engine Room
 
 ### `backend/src/index.js` (The Orchestrator)
-- **What it does:** Boots the entire system.
+- **What it does:** Acts as the "Conductor" of the application. It doesn't do the heavy lifting itself, but it manages the **timing and dependencies** of all other services (DB, WebSockets, External APIs) to ensure they start in the correct order.
 - **Low-Level Flow:**
     1. Connects to MongoDB via `mongoose.js`.
     2. Initializes the WebSocket server (`initWebSocketServer`).
