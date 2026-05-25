@@ -1,48 +1,52 @@
 # CryptoSim: Low-Level Technical Guide
 
-This guide breaks down exactly how each component of the CryptoSim application works at a fundamental level.
+This guide breaks down exactly how each component of the CryptoSim application works at a fundamental level, including the **"Why"** behind each system's logic.
 
 ---
 
 ## 1. Backend: The Engine Room
 
 ### `backend/src/index.js` (The Orchestrator)
-- **What it does:** Acts as the "Conductor" of the application. It doesn't do the heavy lifting itself, but it manages the **timing and dependencies** of all other services (DB, WebSockets, External APIs) to ensure they start in the correct order.
+- **What it does:** Acts as the "Conductor" of the application. It doesn't do the heavy lifting itself, but it manages the **timing and dependencies** of all other services.
+- **Why?** To ensure a stable startup. If the Binance stream started before the Database was connected, the app would crash trying to save data that has no destination.
 - **Low-Level Flow:**
     1. Connects to MongoDB via `mongoose.js`.
     2. Initializes the WebSocket server (`initWebSocketServer`).
     3. Handles standard Express middleware (CORS, Body-Parser).
-    4. **Recovery:** Runs `reconcileTradingState` and starts a recovery loop to fix any orders stuck in `PROCESSING` status from a previous crash.
+    4. **Recovery:** Runs `reconcileTradingState` and starts a recovery loop.
+        - **Why?** To fix "ghost orders" that might have been left in a `PROCESSING` state if the server crashed mid-trade.
     5. **Seeding:** Automatically creates a demo user and assets if the DB is empty.
     6. **Stream Start:** Connects to the Binance WebSocket API *only after* the internal server is healthy.
 
 ### `backend/src/integrations/binance.service.js` (External Data)
 - **Function:** `startBinanceStream(symbols)`
 - **Low-Level Flow:**
-    - Opens a WebSocket connection to `wss://stream.binance.com:9443`.
+    - Opens a WebSocket connection to Binance.
     - On every message:
         1. Parses the JSON ticker data.
         2. Calls `updatePrice` in `market.state.js`.
+            - **Why?** To update the fast in-memory cache for the rest of the app to use.
         3. Calls `broadcastPrice` in `ws.server.js`.
+            - **Why?** To push the new price to all connected browsers instantly.
         4. Triggers the **Matching Engine** (`checkAndExecuteOrders`).
-        5. Periodically (every 15s) saves the ticker to MongoDB for historical tracking.
+            - **Why?** To see if this new price fills any user's limit orders.
+        5. Periodically (every 15s) saves the ticker to MongoDB.
 
 ### `backend/src/modules/orders/services/matching-engine-service.js` (The Brain)
-- **Logic:**
-    - Iterates through all `OPEN` limit orders for the symbol that just received a price update.
-    - Compares the current market price to the order's `limitPrice`.
-    - If the condition is met (e.g., Price <= Limit for a Buy), it initiates the trade.
-    - **Step-by-step Execution:**
-        1. Mark order as `PROCESSING`.
-        2. Reserve wallet balance (Atomic operation).
-        3. Create a `Position` record.
-        4. Finalize order as `FILLED`.
-        5. Trigger real-time updates to the user.
+- **Logic:** This service is the "Matchmaker" between prices and orders.
+- **Why sequential?** It uses `matching-runtime-service.js` to ensure price ticks are processed one-by-one. This prevents two ticks from accidentally filling the same order twice.
+- **Step-by-step Execution:**
+    1. Mark order as `PROCESSING`.
+        - **Why?** To "lock" the order so no other process can touch it.
+    2. Reserve wallet balance (Atomic operation).
+        - **Why?** To ensure the user has enough money and "lock" those funds for this specific trade.
+    3. Create a `Position` record.
+    4. Finalize order as `FILLED`.
+    5. Trigger real-time updates to the user.
 
 ### `backend/src/modules/orders/services/wallet-atomic-service.js` (The Bank)
-- **Logic:** Uses MongoDB's atomic `$inc` operator.
-- **Example:** To reserve $100, it sends a command: `update user where balance >= 100 set balance = balance - 100, reserved = reserved + 100`.
-- **Safety:** Because this is a single database command, it's impossible for two simultaneous requests to "steal" the same $100.
+- **Logic:** Uses MongoDB's atomic `$inc` and `$gte` operators.
+- **Why?** To prevent **Race Conditions**. By doing the "Check" (Do they have enough money?) and the "Action" (Subtract it) in one single database command, it's impossible for a user to "double-spend" their balance.
 
 ---
 
@@ -50,8 +54,8 @@ This guide breaks down exactly how each component of the CryptoSim application w
 
 ### `backend/src/websocket/ws.server.js`
 - **What it does:** Manages individual browser connections.
-- **Internal State:** Keeps a `Map` of which user is connected to which socket and what symbols they have "subscribed" to.
-- **Flow:** When a price update comes from Binance, it checks this map and sends the data *only* to users watching that specific coin.
+- **Internal State:** Keeps a `Map` of users and their "subscriptions."
+- **Why?** Efficiency. Instead of broadcasting every coin's price to every user, the server only sends "Bitcoin" data to users who are actually looking at the Bitcoin chart.
 
 ---
 
@@ -59,24 +63,19 @@ This guide breaks down exactly how each component of the CryptoSim application w
 
 ### `frontend/src/app/lib/realtime.js`
 - **What it does:** The "Client Side" of the WebSocket.
-- **Logic:** Handles the raw connection, sends the JWT token for authentication, and provides an `addRealtimeListener` function so UI components can subscribe to messages.
+- **Why?** To manage the connection lifecycle (connecting, authenticating with JWT, and auto-reconnecting if the WiFi drops).
 
 ### `frontend/src/app/components/AppLayout.jsx`
 - **What it does:** Acts as the central data hub for the UI.
-- **Logic:**
-    - It is the primary listener for the WebSocket.
-    - When a message arrives, instead of passing it down through 50 layers of "props," it dispatches a **Custom Browser Event** (like `app:price-update`).
-    - This allows any page (Dashboard, Simulator, etc.) to listen for data independently.
-
-### `frontend/src/app/pages/TradeSimulator.jsx`
-- **Logic:**
-    - Listens for `app:price-update`.
-    - Calculates "Unrealized PnL" in real-time by comparing the position's `entryPrice` to the `markPrice` in the incoming event.
-    - Updates the state, which triggers React to re-render the PnL text and the chart.
+- **Logic:** It listens to the socket and dispatches **Custom Browser Events** (like `app:price-update`).
+- **Why?** **Decoupling.** This allows the "Header" to update the price and the "Simulator" to update the chart at the same time without them being connected to each other. They both just "listen" to the same broadcast.
 
 ---
 
 ## 4. Key Security & Integrity Patterns
-1. **JWT Authentication:** Every API request and WebSocket connection requires a signed token.
-2. **Input Validation:** Every request is checked by `zod` schemas before the logic runs.
-3. **Graceful Degradation:** If the Binance feed goes down, the system marks the status as `DISCONNECTED` and disables trading buttons in the UI automatically.
+1. **JWT Authentication:** Every request requires a signed token.
+    - **Why?** To ensure you can only see and trade your own money.
+2. **Input Validation:** Every request is checked by `zod` schemas.
+    - **Why?** To prevent "Injection" attacks or invalid data (like negative prices) from entering the system.
+3. **Graceful Degradation:** If Binance disconnects, the UI disables trading.
+    - **Why?** To prevent users from trading on "stale" or "old" prices, which would lead to an unfair simulation.
