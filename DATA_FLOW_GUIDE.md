@@ -1,6 +1,6 @@
 # Project Data Flow Guide
 
-This guide maps out exactly how data moves through the CryptoSim application, explaining not just **where** it goes, but **why** each step is necessary for a secure and reactive system.
+This guide maps out exactly how data moves through the CryptoSim application, using the **actual file and function names** from the source code.
 
 ---
 
@@ -8,110 +8,69 @@ This guide maps out exactly how data moves through the CryptoSim application, ex
 This is the path a "Limit Order" takes from the moment you click "Buy" until it becomes an open position.
 
 ### Phase A: Order Creation (Request)
-1.  **`TradeSimulator.jsx`**: User clicks "Buy". Calls `appApi.placeLimitOrder()`.
+1.  **`TradeSimulator.jsx`**: User clicks "Buy / Long". Calls `submitOrder()`, which then calls `appApi.placeLimitOrder()`.
     - **Why:** To initiate the intent to trade. The frontend captures user input (price, size) and sends it to the server.
-2.  **`backend/src/routes/v1.js`**: Request hits the `/orders` mount.
-    - **Why:** The project uses versioned routing (`/v1`). This route acts as a traffic controller, directing all order-related requests to the correct module.
-3.  **`backend/src/modules/orders/routes.js`**: `authenticate` middleware runs, then `validateRequest(createOrderSchema)`.
-    - **Why:** **Security & Integrity.** `authenticate` ensures the user is logged in. `validateRequest` ensures the data (like price) is a valid number before it touches the database, preventing "junk data" or attacks.
-4.  **`backend/src/modules/orders/controllers/create-order.js`**: Extracts `req.body` and `req.user.id`. Calls `createOrderService`.
-    - **Why:** **Separation of Concerns.** The controller's job is only to handle the "web" part (HTTP). It hands off the "business" part to a Service.
-5.  **`backend/src/modules/orders/services/create-order-service.js`**:
-    - Calls **`wallet-atomic-service.js`** (`reserveWalletBalanceAtomic`).
-        - **Why:** To "lock" the user's USDT. This prevents them from spending the same money on two different orders at once.
+2.  **`backend/src/routes/v1.js`**: Request hits `router.use('/orders', orderRoutes)`.
+    - **Why:** To direct all order-related traffic to the orders module.
+3.  **`backend/src/modules/orders/routes.js`**: Middleware `authenticate` runs, followed by `validateRequest(createOrderSchema)`. Hits `router.post('/', ..., createLimitOrder)`.
+    - **Why:** To ensure the user is identity-verified and the trade data is mathematically valid before any processing happens.
+4.  **`backend/src/modules/orders/controllers/create-limit-order.js`**: The `createLimitOrder` controller extracts `req.body` and `req.user.id`, then calls `placeLimitOrderService()`.
+    - **Why:** To bridge the web request to the core trading logic.
+5.  **`backend/src/modules/orders/services/place-limit-order-service.js`**:
+    - Calls `reserveWalletBalanceAtomic()` in **`wallet-atomic-service.js`**.
+        - **Why:** To atomically "lock" the user's USDT so they cannot spend it elsewhere while the order is open.
     - Saves the order to MongoDB with `status: "OPEN"`.
-        - **Why:** To persist the order so that the matching engine can find it later when the price hits the target.
-    - Returns success to the UI.
+        - **Why:** To persist the order so the matching engine can monitor the market for an entry.
 
 ### Phase B: Order Matching (Execution)
-6.  **`binance.service.js`**: A new price tick arrives from Binance.
-    - **Why:** To provide real-world market data that drives the simulator's execution.
-7.  **`matching-engine-service.js`**: `checkAndExecuteOrders()` is called.
-    - **Why:** This is the "Engine" that constantly compares live prices against all `OPEN` orders in the database.
-8.  **`matching-runtime-service.js`**: `registerLimitConfirmation()` runs.
-    - **Why:** **Stability.** It ensures the price has actually "touched" the limit for at least 2 ticks, preventing execution on a single "glitch" or outlier price point.
-9.  **`matching-engine-service.js`**: Calls `processOrder()`.
-    - Changes status to `PROCESSING`.
-        - **Why:** To "claim" the order so that no other simultaneous price update tries to execute it at the same time (Race Condition protection).
-    - Calls **`position-engine-service.js`** (`openPosition()`).
-10. **`position-engine-service.js`**: Creates a new `Position` document.
-    - **Why:** To represent that the user now "owns" the asset and can track its profit/loss.
-11. **`matching-engine-service.js`**: Finalizes the order as `status: "FILLED"`.
-    - **Why:** To mark the order's lifecycle as complete.
+6.  **`backend/src/integrations/binance.service.js`**: A new price ticker arrives from Binance via WebSocket.
+7.  **`backend/src/modules/orders/services/matching-engine-service.js`**: `checkAndExecuteOrders(symbol, currentPrice)` is called on every price tick.
+    - **Why:** To constantly check if any `OPEN` orders have had their `limitPrice` hit.
+8.  **`backend/src/modules/orders/services/matching-runtime-service.js`**: `registerLimitConfirmation()` ensures the price is stable (2 ticks).
+    - **Why:** To prevent "flash" fills on low-volume glitches.
+9.  **`backend/src/modules/orders/services/matching-engine-service.js`**: Calls `processOrder()`, which changes status to `PROCESSING`.
+    - **Why:** To "claim" the order in a multi-tick environment.
+10. **`backend/src/modules/orders/services/position-engine-service.js`**: `openPosition()` is called to create a new `Position` document.
+    - **Why:** To officially start the trade tracking for the user.
+11. **`backend/src/modules/orders/services/matching-engine-service.js`**: Finalizes the order as `status: "FILLED"`.
 
 ### Phase C: Notification (Real-time)
-12. **`trading-realtime-service.js`**: Calls `emitUserTradingEvent()`.
-    - **Why:** To trigger the notification system. The backend knows the trade is done, but the user doesn't yet.
-13. **`ws.server.js`**: Sends an `order_filled` message over the WebSocket.
-    - **Why:** To "push" the data to the user's browser instantly without them having to refresh the page.
-14. **`AppLayout.jsx`**: Receives the message, dispatches `app:trading-event`.
-    - **Why:** To broadcast the news internally to all parts of the React app that might be listening.
-15. **`TradeSimulator.jsx`**: Hears the event, calls `loadSimulatorData()`.
-    - **Why:** To refresh the local UI state so the user sees their new position and updated balance immediately.
+12. **`backend/src/modules/orders/services/trading-realtime-service.js`**: Calls `emitUserTradingEvent(userId, 'order_filled', ...)`.
+13. **`backend/src/websocket/ws.server.js`**: `broadcastUserEvent()` sends the message to the user's specific socket.
+14. **`frontend/src/app/components/AppLayout.jsx`**: WebSocket listener catches the message and dispatches a browser event: `new CustomEvent("app:trading-event", ...)`.
+15. **`frontend/src/app/pages/TradeSimulator.jsx`**: `handleTradingEvent` catches the custom event and calls `loadSimulatorData()`.
+    - **Why:** To trigger a React re-render so the user sees their new position instantly.
 
 ---
 
 ## Flow 2: Real-time Market Data Flow
-This is how a price change on Binance gets to your candlestick chart.
+How a price change on Binance gets to your candlestick chart.
 
-1.  **Binance API**: Sends a JSON packet via WebSocket.
-    - **Why:** To provide high-frequency, low-latency market updates.
-2.  **`binance.service.js`**: Parses the packet into a standardized `marketData` object.
-    - **Why:** To transform Binance's specific format (like using `"c"` for close price) into a format your app understands (`price`).
-3.  **`market.state.js`**: `updatePrice()` saves this to an in-memory object.
-    - **Why:** **Performance.** Reading from a JavaScript object is 1000x faster than querying a database every time a component needs the current price.
-4.  **`ws.server.js`**: `broadcastPrice()` sends the update to subscribed users.
-    - **Why:** To ensure users only get data for the coins they are actually watching, saving bandwidth.
-5.  **`realtime.js` (Frontend)**: Receives the JSON update.
-    - **Why:** To act as the bridge between the server's socket and the React app.
-6.  **`AppLayout.jsx`**: Dispatches a browser-level `app:price-update` event.
-    - **Why:** To allow any component (Chart, Header, Ticker) to "hear" the price change without using complex global state like Redux.
-7.  **`TradeSimulator.jsx`**: Updates its `marketSnapshot` state.
-    - **Why:** To trigger a React re-render of the price text and PnL calculations.
-8.  **`CandlestickChart.jsx`**: Re-renders with the new price point.
-    - **Why:** To visually represent the price movement in the chart.
+1.  **`binance.service.js`**: WebSocket `ws.on('message')` receives a ticker.
+2.  **`backend/src/state/market.state.js`**: `updatePrice(symbol, marketData)` updates the in-memory cache.
+    - **Why:** High-speed access for the matching engine and API.
+3.  **`backend/src/websocket/ws.server.js`**: `broadcastPrice(symbol, marketData)` pushes data to subscribed clients.
+4.  **`frontend/src/app/lib/realtime.js`**: `socket.addEventListener("message")` receives the price packet.
+5.  **`frontend/src/app/components/AppLayout.jsx`**: Dispatches `new CustomEvent("app:price-update", ...)`.
+6.  **`frontend/src/app/pages/TradeSimulator.jsx`**: `handlePriceUpdate` updates the `marketSnapshot` state.
+7.  **`frontend/src/app/components/CandlestickChart.jsx`**: Receives the new candles/price via props and re-renders.
 
 ---
 
 ## Flow 3: Dashboard & Analytics Flow
-How your stats (Win Rate, Profit Factor) are updated after a trade.
+How your stats are updated after a trade closes.
 
-1.  **`position-engine-service.js`**: A position is closed (`closePositionWithPrice`).
-    - **Why:** The trade is finished, and we now know the final Profit/Loss.
-2.  **`snapshot-service.js`**: `rebuildUserPortfolioSnapshots()` is triggered.
-    - **Why:** To convert raw trade data into human-readable analytics.
-    - It calculates the new `totalPortfolioValue` and updates the **`dashboardProfile`**.
-        - **Why:** So the "Win Rate" and "Net Profit" cards on the dashboard reflect the latest trade instantly.
-3.  **`trading-realtime-service.js`**: Calls `emitPortfolioUpdated()`.
-    - **Why:** To tell the frontend that its cached balance and stats are now out of date.
-4.  **`AppLayout.jsx`**: Receives `portfolio_updated` event, updates the top bar balance.
-    - **Why:** So the user sees their new total money at the top of the screen immediately.
+1.  **`position-engine-service.js`**: `closePositionWithPrice()` is called.
+2.  **`backend/src/modules/dashboard/services/snapshot-service.js`**: `rebuildUserPortfolioSnapshots(userId)` recalculates the entire dashboard.
+    - **Why:** To ensure "Win Rate" and "Net Profit" reflect the latest closed trade.
+3.  **`trading-realtime-service.js`**: `emitPortfolioUpdated(userId)` tells the frontend to refresh.
+4.  **`AppLayout.jsx`**: Receives `portfolio_updated`, updates `portfolioValue` in the top header.
 
 ---
 
 ## Flow 4: Authentication Flow
-How the app remembers who you are.
-
-1.  **`LoginPage.jsx`**: User submits credentials.
-    - **Why:** To prove identity.
-2.  **`auth-controller.js`**: Calls `jwt.js` to generate an `accessToken`.
-    - **Why:** **Stateless Security.** Instead of the server "remembering" you, it gives you a signed "passport" (JWT) that you show with every future request.
-3.  **`api.js` (Frontend)**: Stores the token in `localStorage`.
-    - **Why:** So that if you refresh the page or close your browser, you stay logged in.
-4.  **`AppSession.jsx`**: On refresh, it calls `authApi.getMe()`.
-    - **Why:** **"Hydration."** It fetches your latest name, balance, and settings from the database to populate the UI.
-5.  **`authenticate.js` (Backend Middleware)**: Reads the `Bearer` token.
-    - **Why:** To verify your "passport" on every single request, ensuring you can only see *your* trades and not someone else's.
-
----
-
-## Summary of File Roles
-| File Type | Primary Role | Why it exists |
-| :--- | :--- | :--- |
-| **`schema/*.model.js`** | Data Definition | To define the structure and rules of your data in MongoDB. |
-| **`modules/*/routes.js`** | Entry points | To define URLs and apply security/validation filters. |
-| **`modules/*/controllers/*.js`** | Request Handling | To bridge the gap between the Web (HTTP) and the App Logic. |
-| **`modules/*/services/*.js`** | Business Logic | To perform the actual math and database operations. |
-| **`state/*.js`** | In-memory State | To provide ultra-fast access to volatile data (like prices). |
-| **`integrations/*.js`** | External Connection | To interact with outside services like Binance. |
-| **`websocket/*.js`** | Real-time Push | To send data to the user without them asking for it. |
+1.  **`LoginPage.jsx`**: Calls `authApi.login(email, password)`.
+2.  **`backend/src/modules/auth/controllers/login.js`**: `login` controller calls `authService.login()`.
+3.  **`backend/src/modules/auth/services/login-service.js`**: `login(email, password)` verifies the user and calls `jwtUtils.generateTokens()`.
+4.  **`frontend/src/app/context/AppSession.jsx`**: `saveAuthSession(payload)` saves tokens to `localStorage` and sets the React context.
+5.  **`backend/src/middlewares/authenticate.js`**: `authenticate(req, res, next)` verifies the `Bearer` token on every API call.
