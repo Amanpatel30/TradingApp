@@ -7,13 +7,21 @@ const { BadRequestError } = require('../../../utils/custom-error');
 // @route   POST /api/v1/auth/register
 // @access  Public
 const register = asyncHandler(async (req, res) => {
-  const { name, email, password, role = 'user' } = req.body;
+  // ✅ SECURITY: Only extract allowed fields from request body to prevent mass assignment
+  const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
     throw new BadRequestError('Please provide name, email, and password');
   }
 
-  const result = await authService.register({ name, email, password, role });
+  // ✅ SECURITY: Explicitly set role to 'user' to prevent privilege escalation
+  // Clients should never be able to register as an admin directly
+  const result = await authService.register({
+    name,
+    email,
+    password,
+    role: 'user'
+  });
 
   return ApiResponse.created(res, result, 'User registered successfully');
 });

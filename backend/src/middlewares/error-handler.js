@@ -1,5 +1,6 @@
 const Logger = require('../utils/logger');
 const { CustomError } = require('../utils/custom-error');
+const { maskSensitiveData } = require('../utils/security');
 
 const logger = new Logger('ErrorHandler');
 
@@ -12,13 +13,16 @@ const errorHandler = (err, req, res, next) => {
   error.message = err.message;
   error.statusCode = err.statusCode;
 
+  // ✅ SECURITY: Mask sensitive data in request body before logging
+  const maskedBody = maskSensitiveData(req.body);
+
   // Log error details
   logger.error(err.message, { 
     statusCode: err.statusCode || 500,
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
+    body: maskedBody,
     params: req.params,
     query: req.query,
   });
