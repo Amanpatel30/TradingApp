@@ -1,0 +1,4 @@
+## 2026-05-31 - [Sensitive Data Leakage in Logs & Privilege Escalation]
+**Vulnerability:** The centralized error handler was logging the entire request body, potentially exposing sensitive data like passwords and refresh tokens in log files. Additionally, the registration endpoint allowed users to specify a 'role' in the request body, leading to privilege escalation (registering as admin).
+**Learning:** Centralized error handlers should always sanitize request data before logging. Input validation/extraction should be strict, especially on registration and profile updates.
+**Prevention:** Mask sensitive fields (password, token, etc.) in the logging middleware. Explicitly extract only safe fields from req.body in controllers instead of using object spread or passing the entire body to services.

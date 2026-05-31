@@ -12,13 +12,20 @@ const errorHandler = (err, req, res, next) => {
   error.message = err.message;
   error.statusCode = err.statusCode;
 
+  // Sanitize body before logging to avoid leaking sensitive info
+  const sanitizedBody = { ...req.body };
+  const sensitiveFields = ['password', 'refreshToken', 'token', 'accessToken'];
+  sensitiveFields.forEach(field => {
+    if (sanitizedBody[field]) sanitizedBody[field] = '*****';
+  });
+
   // Log error details
   logger.error(err.message, { 
     statusCode: err.statusCode || 500,
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
+    body: sanitizedBody,
     params: req.params,
     query: req.query,
   });
