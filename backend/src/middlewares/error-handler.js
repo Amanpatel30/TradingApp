@@ -4,6 +4,26 @@ const { CustomError } = require('../utils/custom-error');
 const logger = new Logger('ErrorHandler');
 
 /**
+ * Redact sensitive information from objects before logging
+ */
+const redactSensitiveInfo = (obj) => {
+  if (!obj || typeof obj !== 'object') return obj;
+
+  const redacted = { ...obj };
+  const sensitiveFields = ['password', 'token', 'accessToken', 'refreshToken', 'secret'];
+
+  Object.keys(redacted).forEach(key => {
+    if (sensitiveFields.includes(key)) {
+      redacted[key] = '[REDACTED]';
+    } else if (typeof redacted[key] === 'object') {
+      redacted[key] = redactSensitiveInfo(redacted[key]);
+    }
+  });
+
+  return redacted;
+};
+
+/**
  * Centralized Error Handler Middleware
  * Handles all errors in the application
  */
@@ -12,15 +32,15 @@ const errorHandler = (err, req, res, next) => {
   error.message = err.message;
   error.statusCode = err.statusCode;
 
-  // Log error details
+  // Log error details - mask sensitive fields in request data
   logger.error(err.message, { 
     statusCode: err.statusCode || 500,
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
-    params: req.params,
-    query: req.query,
+    body: redactSensitiveInfo(req.body),
+    params: redactSensitiveInfo(req.params),
+    query: redactSensitiveInfo(req.query),
   });
 
   // Mongoose validation error

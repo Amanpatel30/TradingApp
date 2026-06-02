@@ -7,7 +7,8 @@ const { BadRequestError } = require('../../../utils/custom-error');
 // @route   POST /api/v1/auth/register
 // @access  Public
 const register = asyncHandler(async (req, res) => {
-  const { name, email, password, role = 'user' } = req.body;
+  const { name, email, password } = req.body;
+  const role = 'user'; // Hardcode role to prevent privilege escalation via request body
 
   if (!name || !email || !password) {
     throw new BadRequestError('Please provide name, email, and password');
