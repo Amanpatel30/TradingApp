@@ -19,6 +19,9 @@ backend/src/logs/
 # Runtime/debug output
 coverage/
 dist/
+test-results/
+playwright-report/
+blob-report/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
