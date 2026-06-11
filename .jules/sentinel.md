@@ -1,0 +1,4 @@
+## 2026-06-11 - Registration Mass Assignment & Sensitive Log Exposure
+**Vulnerability:** User registration allowed passing an arbitrary `role` field in the request body, enabling privilege escalation to 'admin'. Additionally, the global error handler logged the full request body, exposing plaintext passwords during authentication failures.
+**Learning:** Controllers that spread `req.body` directly into service calls or database models without explicit whitelisting are susceptible to mass assignment. Centralized logging without a redaction layer risks persistent exposure of secrets in log files.
+**Prevention:** Always hardcode or strictly whitelist sensitive fields like roles in controllers. Implement a recursive redaction utility in the logging pipeline to mask known sensitive keys (password, token, secret) automatically.
