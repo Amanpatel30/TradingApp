@@ -1,0 +1,4 @@
+## 2025-05-14 - [CRITICAL] Privilege Escalation via Mass Assignment in Registration
+**Vulnerability:** The registration controller (`backend/src/modules/auth/controllers/register.js`) was extracting the `role` field directly from the request body and passing it to the `authService.register` method.
+**Learning:** Accepting internal state or authorization fields like `role` directly from user input during public registration creates a critical privilege escalation risk. Even if defaults are provided (e.g., `role = 'user'`), they can be overridden by an attacker.
+**Prevention:** Always hardcode default roles for public registration endpoints or use a strict whitelist for input fields. Do not allow clients to specify their own roles unless the endpoint is specifically designed for administrative user management.
