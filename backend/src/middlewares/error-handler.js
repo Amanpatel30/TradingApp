@@ -4,6 +4,32 @@ const { CustomError } = require('../utils/custom-error');
 const logger = new Logger('ErrorHandler');
 
 /**
+ * Masks sensitive information in an object or array
+ * @param {any} obj - The object or array to sanitize
+ * @returns {any} The sanitized object or array
+ */
+const sanitizeBody = (obj) => {
+  if (!obj || typeof obj !== 'object') return obj;
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => sanitizeBody(item));
+  }
+
+  const sensitiveFields = ['password', 'token', 'refreshToken', 'accessToken', 'secret', 'apiKey'];
+  const sanitized = { ...obj };
+
+  Object.keys(sanitized).forEach((key) => {
+    if (sensitiveFields.includes(key)) {
+      sanitized[key] = '***MASKED***';
+    } else if (typeof sanitized[key] === 'object' && sanitized[key] !== null) {
+      sanitized[key] = sanitizeBody(sanitized[key]);
+    }
+  });
+
+  return sanitized;
+};
+
+/**
  * Centralized Error Handler Middleware
  * Handles all errors in the application
  */
@@ -18,7 +44,7 @@ const errorHandler = (err, req, res, next) => {
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
+    body: sanitizeBody(req.body),
     params: req.params,
     query: req.query,
   });
