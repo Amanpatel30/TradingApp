@@ -11,11 +11,11 @@ The CryptoSim platform is a well-structured full-stack application designed for 
 
 ## 3. Loopholes & Architectural Risks
 
-### A. Horizontal Scaling Bottleneck
-The matching engine and market state management rely on in-memory `Set` and `Map` objects. In a multi-instance deployment (behind a load balancer), these states would be fragmented across servers, leading to:
-- Race conditions in order execution.
-- Inconsistent price views between users on different instances.
-- **Recommendation:** Migrate in-memory state and locks to a distributed store like Redis.
+### A. Horizontal Scaling Bottleneck (Split-Brain Risk)
+The matching engine and market state management rely on per-process `Set` and `Map` objects in `matching-runtime-service.js`. In a multi-instance deployment (behind a load balancer), each server would maintain its own independent state, creating a split-brain scenario where:
+- The same order can be independently matched and filled on multiple instances simultaneously, leading to duplicate fills and over-execution.
+- Market price state fragments across servers, causing inconsistent views between users.
+- **Recommendation:** Migrate in-memory state and locks to a distributed store like Redis to ensure all instances share a single source of truth for order state and symbol locks.
 
 ### B. In-Memory Volatility
 The current market price state is volatile. On server restart, all "live" price data is lost until the Binance stream reconnects and sends new ticks.

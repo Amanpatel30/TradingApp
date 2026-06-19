@@ -9,6 +9,5 @@ router.use('/v1', v1Routes);
 
 // Compatibility mount
 router.use('/trades', tradeRoutes);
-console.log("test");
 
 module.exports = router;

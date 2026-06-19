@@ -72,7 +72,7 @@ This guide breaks down exactly how each component of the CryptoSim application w
 
 
 ## 4. Key Security & Integrity Patterns
-1. **JWT Authentication:** Every API request and WebSocket connection requires a signed token.
+1. **JWT Authentication:** Every API request requires a signed token. WebSocket connections are accepted without initial authentication, and the client must send a dedicated `authenticate` message event with a token after connection to validate access.
 2. **Input Validation:** Every request is checked by `zod` schemas before the logic runs.
 3. **Graceful Degradation:** If the Binance feed goes down, the system marks the status as `DISCONNECTED` and disables trading buttons in the UI automatically.
 

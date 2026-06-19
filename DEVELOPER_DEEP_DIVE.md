@@ -31,10 +31,10 @@ The app uses **Atomic MongoDB Operators** to perform the check and the update in
 3. **Failing Safely:** If the user has $40 and tries to spend $60, the query finds **0 documents** that match. No money is subtracted, nothing is corrupted, and the database returns a "0 matched" status, allowing the backend to return an "Insufficient Funds" error safely.
 
 ### C. The Sequential Tick Processor
-High-frequency market data can cause race conditions if multiple price updates are processed at once for the same user.
+High-frequency market data can cause race conditions if multiple price updates are processed at once for the same symbol.
 - **File:** `backend/src/modules/orders/services/matching-runtime-service.js`
-- **Pattern:** Tick Queuing.
-- **Logic:** It uses a `Map` of "Active Symbols." If a price update for `BTC` arrives while another is still being processed, the new one is queued. This ensures that order #1 is always filled before order #2 if the price hits them in that sequence.
+- **Pattern:** Tick Queuing per Symbol.
+- **Logic:** It uses a `Map` of "Active Symbols." If a price update for `BTC` arrives while another is still being processed, the new one is queued. This serializes tick processing per symbol to prevent concurrent modifications to the same market state, but does not enforce any specific ordering of which orders are filled first (order retrieval from the database is not sorted).
 
 ---
 
