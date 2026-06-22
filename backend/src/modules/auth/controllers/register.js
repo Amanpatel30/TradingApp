@@ -7,6 +7,7 @@ const { BadRequestError } = require('../../../utils/custom-error');
 // @route   POST /api/v1/auth/register
 // @access  Public
 const register = asyncHandler(async (req, res) => {
+  // req.body is already validated and sanitized by registerSchema
   const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
