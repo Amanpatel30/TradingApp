@@ -8,7 +8,19 @@ const { BadRequestError } = require('../../../utils/custom-error');
 // @access  Public
 const register = asyncHandler(async (req, res) => {
   // req.body is already validated and sanitized by registerSchema
-  const result = await authService.register(req.body);
+  const { name, email, password } = req.body;
+
+  if (!name || !email || !password) {
+    throw new BadRequestError('Please provide name, email, and password');
+  }
+
+  // Security: Always set role to 'user' to prevent privilege escalation
+  const result = await authService.register({
+    name,
+    email,
+    password,
+    role: 'user',
+  });
 
   return ApiResponse.created(res, result, 'User registered successfully');
 });
