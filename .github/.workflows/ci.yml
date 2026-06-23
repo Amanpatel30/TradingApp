@@ -1,4 +1,4 @@
-name: TradingApp CI
+name: TradingApp Pipeline
 
 on:
   pull_request:
