@@ -2,10 +2,14 @@ name: TradingApp CI
 
 on:
   pull_request:
+  push:
+    branches:
+      - master
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout Code
@@ -15,11 +19,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            backend/package-lock.json
 
       # Frontend
       - name: Install Frontend
         working-directory: frontend
-        run: npm install
+        run: npm ci
 
       - name: Build Frontend
         working-directory: frontend
@@ -28,9 +36,8 @@ jobs:
       # Backend
       - name: Install Backend
         working-directory: backend
-        run: npm install
+        run: npm ci
 
-      # Optional backend lint if available
       - name: Backend Lint
         working-directory: backend
         run: npm run lint --if-present
