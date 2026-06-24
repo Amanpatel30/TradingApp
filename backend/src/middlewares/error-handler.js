@@ -1,5 +1,6 @@
 const Logger = require('../utils/logger');
 const { CustomError } = require('../utils/custom-error');
+const { sanitizeObject } = require('../utils/sanitize');
 
 const logger = new Logger('ErrorHandler');
 
@@ -12,13 +13,13 @@ const errorHandler = (err, req, res, next) => {
   error.message = err.message;
   error.statusCode = err.statusCode;
 
-  // Log error details
+  // Log error details - Sanitize body to avoid leaking sensitive data like passwords
   logger.error(err.message, { 
     statusCode: err.statusCode || 500,
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
+    body: sanitizeObject(req.body),
     params: req.params,
     query: req.query,
   });
