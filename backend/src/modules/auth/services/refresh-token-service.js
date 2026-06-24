@@ -1,27 +1,28 @@
 const User = require('../../../schema/user.model');
 const jwtUtils = require('../../../lib/jwt');
+const { UnauthorizedError } = require('../../../utils/custom-error');
 
 const refreshToken = async (oldRefreshToken) => {
-  // Verify refresh token
-  const decoded = jwtUtils.verifyRefreshToken(oldRefreshToken);
+  let decoded;
 
-  // Find user with refresh token
-  const user = await User.findOne({ 
-    _id: decoded.id, 
-    refreshToken: oldRefreshToken 
+  try {
+    decoded = jwtUtils.verifyRefreshToken(oldRefreshToken);
+  } catch (error) {
+    throw new UnauthorizedError('Invalid or expired refresh token');
+  }
+
+  const user = await User.findOne({
+    _id: decoded.id,
+    refreshToken: oldRefreshToken,
   }).select('+refreshToken');
 
   if (!user) {
-    const error = new Error('Invalid refresh token');
-    error.statusCode = 401;
-    throw error;
+    throw new UnauthorizedError('Invalid refresh token');
   }
 
-  // Generate new tokens
   const payload = { id: user._id, email: user.email, role: user.role };
   const { accessToken, refreshToken: newRefreshToken } = jwtUtils.generateTokens(payload);
 
-  // Update refresh token in database
   user.refreshToken = newRefreshToken;
   await user.save();
 

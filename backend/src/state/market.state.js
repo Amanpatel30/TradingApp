@@ -44,6 +44,14 @@ const setMarketConnectionStatus = (status) => {
 
 const getLatestMarketEventAt = () => lastMarketEventAt;
 
+const resetMarketState = () => {
+  Object.keys(market).forEach((symbol) => {
+    delete market[symbol];
+  });
+  connectionStatus = 'DISCONNECTED';
+  lastMarketEventAt = 0;
+};
+
 const getMarketFeedStatus = () => {
   const now = Date.now();
   const ageMs = lastMarketEventAt ? now - lastMarketEventAt : Number.POSITIVE_INFINITY;
@@ -73,4 +81,5 @@ module.exports = {
   setMarketConnectionStatus,
   getLatestMarketEventAt,
   getMarketFeedStatus,
+  resetMarketState,
 };

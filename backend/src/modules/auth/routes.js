@@ -10,17 +10,15 @@ const { updateProfileController } = require('./controllers/update-profile');
 const { addDemoBalanceController } = require('./controllers/add-demo-balance');
 const authenticate = require('../../middlewares/authenticate');
 const validateRequest = require('../../middlewares/validate-request');
-const { registerSchema, loginSchema } = require('./validations/auth.schema');
+const { registerSchema, loginSchema, updateProfileSchema } = require('./validations/auth.schema');
 
-// Public routes
 router.post('/register', validateRequest(registerSchema), register);
 router.post('/login', validateRequest(loginSchema), login);
 router.post('/refresh-token', refreshToken);
 
-// Protected routes
 router.post('/logout', authenticate, logout);
 router.get('/me', authenticate, getMe);
-router.patch('/profile', authenticate, updateProfileController);
+router.patch('/profile', authenticate, validateRequest(updateProfileSchema), updateProfileController);
 router.post('/demo-balance', authenticate, addDemoBalanceController);
 
 module.exports = router;

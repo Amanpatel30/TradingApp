@@ -4,9 +4,8 @@ const jwtUtils = require('../lib/jwt');
 const { getTradingSystemStatus } = require('../state/trading-system.state');
 
 let wss;
+let marketStatusInterval;
 
-// Store subscriptions per client
-// ws → Set of subscribed symbols
 const clientSubscriptions = new Map();
 const clientUsers = new Map();
 
@@ -25,26 +24,45 @@ const buildMarketStatusPayload = () => {
   };
 };
 
-const sendMarketStatus = (ws) => {
+const sendJson = (ws, payload) => {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     return;
   }
 
-  ws.send(
-    JSON.stringify({
-      event: 'market_status',
-      data: buildMarketStatusPayload(),
-    })
-  );
+  ws.send(JSON.stringify(payload));
+};
+
+const sendMarketStatus = (ws) => {
+  sendJson(ws, {
+    event: 'market_status',
+    data: buildMarketStatusPayload(),
+  });
+};
+
+const closeWebSocketServer = () => {
+  if (marketStatusInterval) {
+    clearInterval(marketStatusInterval);
+    marketStatusInterval = null;
+  }
+
+  if (wss) {
+    for (const client of wss.clients) {
+      client.close();
+    }
+
+    wss.close();
+    wss = null;
+  }
+
+  clientSubscriptions.clear();
+  clientUsers.clear();
 };
 
 const initWebSocketServer = (server) => {
+  closeWebSocketServer();
   wss = new WebSocket.Server({ server });
 
   wss.on('connection', (ws) => {
-    console.log('🟢 Client connected');
-
-    // Initialize empty subscription set
     clientSubscriptions.set(ws, new Set());
     clientUsers.set(ws, null);
     sendMarketStatus(ws);
@@ -56,80 +74,84 @@ const initWebSocketServer = (server) => {
         if (parsed.event === 'authenticate') {
           const token = String(parsed.token || '').trim();
           if (!token) {
-            ws.send(JSON.stringify({ event: 'error', message: 'Missing websocket token' }));
+            sendJson(ws, { event: 'error', message: 'Missing websocket token' });
             return;
           }
 
           const payload = jwtUtils.verifyAccessToken(token);
           clientUsers.set(ws, String(payload.id || payload._id || ''));
-          ws.send(JSON.stringify({ event: 'authenticated', data: { userId: clientUsers.get(ws) } }));
+          sendJson(ws, {
+            event: 'authenticated',
+            data: { userId: clientUsers.get(ws) },
+          });
           sendMarketStatus(ws);
           return;
         }
 
         if (parsed.event === 'subscribe') {
           const symbol = parsed.symbol?.toUpperCase();
-          if (!symbol) return;
+          if (!symbol) {
+            sendJson(ws, { event: 'error', message: 'Missing symbol' });
+            return;
+          }
 
           const latest = getPrice(symbol);
 
           if (!latest) {
-            ws.send(JSON.stringify({
+            sendJson(ws, {
               event: 'error',
-              message: `Symbol ${symbol} is not supported`
-            }));
+              message: `Symbol ${symbol} is not supported`,
+            });
             return;
           }
 
           clientSubscriptions.get(ws).add(symbol);
 
-          ws.send(JSON.stringify({
+          sendJson(ws, {
             event: 'price_update',
-            data: latest
-          }));
+            data: latest,
+          });
+          return;
         }
 
         if (parsed.event === 'unsubscribe') {
           const symbol = parsed.symbol?.toUpperCase();
-          if (!symbol) return;
+          if (!symbol) {
+            sendJson(ws, { event: 'error', message: 'Missing symbol' });
+            return;
+          }
 
           clientSubscriptions.get(ws).delete(symbol);
+          return;
         }
+
+        sendJson(ws, { event: 'error', message: `Unsupported event: ${parsed.event}` });
       } catch (err) {
-        console.error('Invalid WS message:', err.message);
-        ws.send(JSON.stringify({ event: 'error', message: err.message || 'Invalid websocket message' }));
+        sendJson(ws, { event: 'error', message: err.message || 'Invalid websocket message' });
       }
     });
 
     ws.on('close', () => {
-      console.log('🔴 Client disconnected');
       clientSubscriptions.delete(ws);
       clientUsers.delete(ws);
     });
   });
 
-  setInterval(() => {
-    if (!wss) {
-      return;
-    }
-
-    const payload = JSON.stringify({
-      event: 'market_status',
-      data: buildMarketStatusPayload(),
-    });
-
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(payload);
-      }
-    });
+  marketStatusInterval = setInterval(() => {
+    broadcastMarketStatus();
   }, 1000);
 
-  console.log('✅ WebSocket server initialized');
+  if (marketStatusInterval.unref) {
+    marketStatusInterval.unref();
+  }
+
+  return wss;
 };
 
 const broadcastPrice = (symbol, data) => {
-  if (!wss) return;
+  if (!wss) {
+    return;
+  }
 
   const message = JSON.stringify({
     event: 'price_update',
@@ -137,11 +159,12 @@ const broadcastPrice = (symbol, data) => {
   });
 
   wss.clients.forEach((client) => {
-    if (client.readyState !== WebSocket.OPEN) return;
+    if (client.readyState !== WebSocket.OPEN) {
+      return;
+    }
 
     const subscriptions = clientSubscriptions.get(client);
 
-    // Only send if client subscribed to this symbol
     if (subscriptions && subscriptions.has(symbol)) {
       client.send(message);
     }
@@ -149,7 +172,9 @@ const broadcastPrice = (symbol, data) => {
 };
 
 const broadcastUserEvent = (userId, event, data) => {
-  if (!wss || !userId) return;
+  if (!wss || !userId) {
+    return;
+  }
 
   const message = JSON.stringify({
     event,
@@ -157,14 +182,22 @@ const broadcastUserEvent = (userId, event, data) => {
   });
 
   wss.clients.forEach((client) => {
-    if (client.readyState !== WebSocket.OPEN) return;
-    if (clientUsers.get(client) !== String(userId)) return;
+    if (client.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    if (clientUsers.get(client) !== String(userId)) {
+      return;
+    }
+
     client.send(message);
   });
 };
 
 const broadcastMarketStatus = () => {
-  if (!wss) return;
+  if (!wss) {
+    return;
+  }
 
   const message = JSON.stringify({
     event: 'market_status',
@@ -178,9 +211,17 @@ const broadcastMarketStatus = () => {
   });
 };
 
+const getWebSocketDiagnostics = () => ({
+  clientCount: wss ? wss.clients.size : 0,
+  subscriptionCount: clientSubscriptions.size,
+  userCount: clientUsers.size,
+});
+
 module.exports = {
   initWebSocketServer,
   broadcastPrice,
   broadcastUserEvent,
   broadcastMarketStatus,
+  closeWebSocketServer,
+  getWebSocketDiagnostics,
 };
