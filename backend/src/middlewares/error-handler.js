@@ -1,5 +1,6 @@
 const Logger = require('../utils/logger');
 const { CustomError } = require('../utils/custom-error');
+const { sanitizeObject } = require('../utils/sanitize');
 
 const logger = new Logger('ErrorHandler');
 
@@ -12,15 +13,15 @@ const errorHandler = (err, req, res, next) => {
   error.message = err.message;
   error.statusCode = err.statusCode;
 
-  // Log error details
+  // Log error details - sanitize body, params and query to prevent sensitive data exposure
   logger.error(err.message, { 
     statusCode: err.statusCode || 500,
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
-    params: req.params,
-    query: req.query,
+    body: sanitizeObject(req.body),
+    params: sanitizeObject(req.params),
+    query: sanitizeObject(req.query),
   });
 
   // Mongoose validation error
