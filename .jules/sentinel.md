@@ -12,4 +12,9 @@
 **Prevention:** Always hardcode sensitive fields like 'role' on registration or use a strict whitelist/validation that only allows standard user roles. Never pass the entire request body or unvalidated role fields to services that create users.
 
 test ci trigger
+
+## 2025-05-15 - [Sensitive Data Exposure in Logs]
+**Vulnerability:** The centralized error handler logged the entire `req.body` without sanitization, exposing plain-text passwords and tokens in application logs during failed requests to `/login`, `/register`, or `/refresh-token`.
+**Learning:** Logging request bodies for debugging is useful, but it must be paired with a robust sanitization mechanism that redacts sensitive fields to comply with security best practices and prevent credential leakage.
+**Prevention:** Implement a recursive sanitization utility that redacts known sensitive fields (e.g., password, token) and use it consistently in all logging middleware and error handlers.
 >>>>>>> master
