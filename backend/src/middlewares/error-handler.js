@@ -1,5 +1,6 @@
 const Logger = require('../utils/logger');
 const { CustomError } = require('../utils/custom-error');
+const { sanitizeObject } = require('../utils/sanitize');
 
 const logger = new Logger('ErrorHandler');
 
@@ -18,9 +19,9 @@ const errorHandler = (err, req, res, next) => {
     stack: err.stack,
     url: req.url,
     method: req.method,
-    body: req.body,
-    params: req.params,
-    query: req.query,
+    body: sanitizeObject(req.body),
+    params: sanitizeObject(req.params),
+    query: sanitizeObject(req.query),
   });
 
   // Mongoose validation error
