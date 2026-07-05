@@ -12,4 +12,8 @@
 **Prevention:** Always hardcode sensitive fields like 'role' on registration or use a strict whitelist/validation that only allows standard user roles. Never pass the entire request body or unvalidated role fields to services that create users.
 
 test ci trigger
->>>>>>> master
+
+## 2026-07-04 - Sensitive Data Exposure in Logs
+**Vulnerability:** The centralized error handler was logging the full request body, params, and query strings in plain text. This could lead to the exposure of sensitive credentials like passwords, tokens, and API keys in application logs.
+**Learning:** Error handlers are a common point of data leakage. While they are invaluable for debugging, they must be treated with caution when logging raw request data. A recursive sanitization utility is necessary to catch sensitive fields nested within complex objects or arrays.
+**Prevention:** Implement a recursive `sanitizeObject` utility to redact known sensitive fields (e.g., password, token, authorization) and use it in all logging middleware and error handlers. Additionally, ensure that sensitive headers like 'Cookie' and 'Authorization' are included in the redaction list.
